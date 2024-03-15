@@ -1,24 +1,29 @@
 #!/usr/bin/env python3
 
 # Standard Python libraries.
+import os
 import sys
 import time
 
 # Third party Python libraries.
 import requests
+import json
 from tqdm import tqdm
 from bs4 import BeautifulSoup
 
 # Custom Python libraries.
 
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 
-sleeptime = 5                   #In seconds, provides a pause to avoid rate limiting by search engine
-samples_threshold = 3           #samples is the amount of times a benchmark test was submitted
-hashrate_threshold= 12000       #Higher Hashrate the better / more expensive
+SER_NUM = 50                   #search number- how many search results the search engine return
+SLEEPTIME = 10                   #In seconds, provides a pause to avoid rate limiting by search engine
+samples_threshold = 100           #samples is the amount of times a benchmark test was submitted
+HASHRATE_MAX= 40000
+hashrate_threshold= 17000       #Higher Hashrate the better / more expensive
 exclude_unbranded_CPUs=True     #unbranded_CPUs are unoffical CPUs that were never released
+CPU_FILE = 'XMRig.json'
 
 EXCLUSIVE_VENDORS= [
     'www.ebay.com',
@@ -65,83 +70,48 @@ UNVERIFIED_VENDORS = [
     "ips.insight.com",
     "www.onlogic.com"]
 
-
-def get_processors_info(from_file=False, file_path=None, print_results=True):
+def get_processors_info(print_results=True):
     processors_info = []
-    if from_file and file_path:
+    if os.path.exists(CPU_FILE):
         try:
-            with open(file_path, 'r', encoding='utf-8') as file:
-                html_content = file.read()
+            with open(CPU_FILE, 'r', encoding='utf-8') as file:
+                cpu_list = json.load(file)
         except Exception as e:
-            print(f"Failed to read HTML file: {e}") 
-            return None
-
-    elif from_file and not file_path:
-        print('Error!')
-        return None
-
-    else: #from_file == False
+            print(f"Failed to read JSON file: {e}") 
+            exit()
+    else:
         try:
-            # Send a GET request to XMRig.com/benchmark
-            html_content = requests.get('www.xmrig.com/benchmark', timeout=9)
-            response.raise_for_status()
+            cpu_list = requests.get('https://api.xmrig.com/1/benchmarks', timeout=9)
+            cpu_list.raise_for_status()
+            with open(CPU_FILE, "w") as file:
+                json.dump(cpu_list.json(), file)
         except Exception as e:
-            print(f"Failed to fetch benchmarks from 'www.xmrig.com'. Please try saving the page as an HTML, named 'XMRig.html', in the same directory as this script.\nError info: {e}")
-            return None
+            print(f"Failed to fetch or save benchmarks from 'www.xmrig.com'.\nError info: {e}")
+            exit()
 
-    try:
-        soup = BeautifulSoup(html_content, 'html.parser')
-    except Exception as e:
-        print(f"Failed to parse processors info: {e}")
-        return None
+    for index, row in enumerate(cpu_list):
+        processor_info = {
+            "rank": index,
+            # "name": row['cpu'],
+            "hashrate": int(row['hashrate']),
+            # "hashrate_1t": int(row['hashrate_1t']),
+            "samples": row['count'],
+            "name": row['cpu']}
+        processors_info.append(processor_info)
 
-    table = soup.find('table', class_='table')
+    filtered_processors = [processor for processor in processors_info if HASHRATE_MAX>=float(processor['hashrate'])>=hashrate_threshold]
+    filtered_processors = [processor for processor in filtered_processors if int(processor['samples']) >= samples_threshold]
+    if exclude_unbranded_CPUs: 
+        filtered_processors = [processor for processor in filtered_processors if not 
+            processor["name"].startswith('AMD Eng Sample') and not processor["name"].startswith('Genuine Intel')]
 
-        if table:
-            rows = table.find('tbody').find_all('tr')
-            for row in rows:
-                columns = row.find_all(['td', 'th'])
-                processor_info = {
-                    "rank": columns[0].get_text(strip=True),
-                    "name": columns[1].find('span').get_text(strip=True),
-                    "hashrate": columns[2].find('span').get_text(strip=True),
-                    "samples": columns[4].find('span').get_text(strip=True)}
-                processors_info.append(processor_info)
-
-            #Filter out enrties that do not meet the search thresholds
-            filtered_processors = [processor for processor in processors_info if float(processor['hashrate']) >= hashrate_threshold]
-            filtered_processors = [processor for processor in filtered_processors if int(processor['samples']) >= samples_threshold]
-            if exclude_unbranded_CPUs: 
-                filtered_processors = [processor for processor in filtered_processors if not 
-                    processor["name"].startswith('AMD Eng Sample') and not processor["name"].startswith('Genuine Intel')]
-
-        if print_results:
-            for processor in filtered_processors:
-                print(processor)
-            print(f"Number of Processors: {len(filtered_processors)}")
-            print(f"hashrate_threshold: {hashrate_threshold}\tsamples_threshold: {samples_threshold}")
-            input("\nPress Enter to continue to search") #remove maybe?
-
-    except Exception as e:
-        print(f"Failed to parse processors info: {e}")
-
+    if print_results:
+        for processor in filtered_processors:
+            print(processor)
+        print(f"Number of Processors: {len(filtered_processors)}")
+        print(f"hashrate range: {hashrate_threshold}-{HASHRATE_MAX}\tsamples_threshold: {samples_threshold}")
+        input("\nPress Enter to continue to search") #remove maybe?
     return filtered_processors
-
-def print_vendor_options(processor_list):
-    print("Processor information with search results:")
-    for i in processor_list:
-        print(f"\n\n\n{processor['rank']}. {processor['name']}\tHR: {processor['hashrate']}")
-        if len(i['Avendors']) > 0:
-            for listing in i['Avendors']:
-                print(f"{listing['source']} \t\t\t ${listing['price']} \t {listing['title']}")
-        if len(i['Bvendors']) > 0:
-            print('\n Unverified vendors:')
-            for listing in i['Bvendors']:
-                print(f"{listing['source']} \t\t\t ${listing['price']} \t {listing['title']}")
-        if len(i['Cvendors']) > 0:
-            print('\n Unknown vendors:')
-            for listing in i['Cvendors']:
-                print(f"{listing['source']} \t\t\t ${listing['price']} \t {listing['title']}")
 
 def search_processor_price_duckduckgo(processor_name):
     url = "https://api.duckduckgo.com/"
@@ -169,18 +139,23 @@ def search_processor_price_duckduckgo(processor_name):
         return None
 
 def search_processor_price_google(processor_name):
-    time.sleep(sleeptime) # Introduce a delay to avoid rate limiting
+    time.sleep(SLEEPTIME) # Introduce a delay to avoid rate limiting
     search_url = f"https://www.google.com/search?q={processor_name}"
     vendors = []
 
     try:
         # Send a GET request to Google Shopping
-        response = requests.get(search_url, timeout=5, params={"num": 50})  ##num is used for number of listings
+        response = requests.get(search_url, 
+            # headers = {'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'},
+            timeout=5, 
+            params={"num": SER_NUM}
+            )  ##num is used for number of listings
         response.raise_for_status()
 
         soup = BeautifulSoup(response.content, 'html.parser') # Parse the HTML content
-    
     except Exception as e:
+        if response.status_code == 429:
+            print(f'retry after: {response.headers["retry-after"]}\n')
         print(f"Failed to perform a Google Shopping search: {e}")
         return None
 
@@ -222,6 +197,32 @@ def search_processor_price_google(processor_name):
 
     return a_vendors, b_vendors, c_vendors
 
+def print_vendor_options(processor_list):
+    print("Processor information with search results:")
+    for i in processor_list:
+        print(f"\n\n\n{i['processors_info']['rank']}. {i['processors_info']['name']}\tHR: {i['processors_info']['hashrate']}")
+        if len(i['Avendors']) > 0:
+            for listing in i['Avendors']:
+                price = "${:<10}".format(listing['price'])
+                source = "{:<25}".format(listing['source'])
+                title = listing['title']
+                print(f"{price}{source}{title}")
+        if len(i['Bvendors']) > 0:
+            print('   Unverified vendors:')
+            for listing in i['Bvendors']:
+                price = "${:<10}".format(listing['price'])
+                source = "{:<25}".format(listing['source'])
+                title = listing['title']
+                print(f"{price}{source}{title}")
+        if len(i['Cvendors']) > 0:
+            print('   Unknown vendors:')
+            for listing in i['Cvendors']:
+                price = "${:<10}".format(listing['price'])
+                source = "{:<25}".format(listing['source'])
+                title = listing['title']
+                print(f"{price}{source}{title}")
+    print()
+
 def idenitfy_optimal_cpu_by_price(processor_list):
     hr2price = []
 
@@ -229,54 +230,49 @@ def idenitfy_optimal_cpu_by_price(processor_list):
         vendors = processor['approved_vendors']
         vendors = [vendor for vendor in vendors if vendor['source'] in EXCLUSIVE_VENDORS] #Filters out non exclusive vendors
 
-        ratio = int(processor['hashrate'].split('.')[0]) / vendors[0]['price']
+        ratio = int(processor['hashrate']) / vendors[0]['price']
         entry = {'name': processor['name'], 'rating': ratio, 'link': vendors[0]['link']}
         hr2price.append(entry) 
     hr2price.sort(key=lambda x: x['rating'], reverse=True)
     print("Higher Score is better!")
     for i, entry in enumerate(hr2price):
-        print(f'{i}. Processor: {entry["name"]}\tScore: {entry["rating"]}\tLink: {entry["link"]}')
+        print(f'{i}. {entry["name"]}\tScore:{round(entry["rating"], 3)}\t{entry["link"]}\n')
 
-if __name__ == "__main__":
-    if os.path.exists('XMRig.html'): 
-        processors_info = get_processors_info_from_file(True, 'XMRig.html')
-    else:
-        processors_info = get_processors_info_from_file(False)
-
-    if not processors_info:
-        print('get_processors_info_from_file() Failed. Terminating script.')
-        exit()
-
-    # processors_info = processors_info[0:26] #Limits the search to savetime/avoid request caps
-     
+def main_search(processors_info):
     processor_list = []
-    achive = []   
-    i = -1
-    for processor in tqdm(processors_info, desc=f"Searching for prices... ", unit="lookup"):
+    archive = []   
+    for processor in tqdm(processors_info, desc=f"Searching for prices... ", unit="search"):
         # print(f"searching: {processor}") # not compatible with tqdm
-        i += 1
-        Avendors, Bvendors, Cvendors  = search_processor_price_google_shopping(processor["name"])
+        Avendors, Bvendors, Cvendors  = search_processor_price_google(processor["name"])
         
-        # with open('XCS_results.txt', 'w', encoding='utf-8') as file: file.write(f"{processor['name']} ---\t{str(Avendors)}\n\n") #Could be used to compare results without preforming search again.
+        #Could be used to compare results without preforming search again.
+        with open('XCS_results.txt', 'w', encoding='utf-8') as file: 
+            file.write(f"{processor['name']} ---\t{str(Avendors)}\n\n") 
 
         if len(Avendors) == 0 and len(Avendors) == 0:
             print(f'Error! No known vendors found. {len(Cvendors)} Unknown vendors found')
-            archive_entry = {'processors_info': processors_info, 'Avendors': None, 'Bvendors': None, 'Cvendors': Cvendors}
-            achive.append(archive_entry)
-            exit()
+            archive_entry = {'processors_info': processor, 'Avendors': None, 'Bvendors': None, 'Cvendors': Cvendors}
+            archive.append(archive_entry)
         elif len(Avendors) == 0:
             print(f'Warning! No approved vendors found! {len(Bvendors)}/{len(Cvendors)} known/unknown vendors found')
             print(f"Skipping {processor['name']} from comparison list.")
-            archive_entry = {'processors_info': processors_info, 'Avendors': None, 'Bvendors': Bvendors, 'Cvendors': Cvendors}
-            achive.append(archive_entry)
-            continue
+            archive_entry = {'processors_info': processor, 'Avendors': None, 'Bvendors': Bvendors, 'Cvendors': Cvendors}
+            archive.append(archive_entry)
         else:
-            archive_entry = {'processors_info': processors_info, 'Avendors': Avendors, 'Bvendors': Bvendors, 'Cvendors': Cvendors}
+            archive_entry = {'processors_info': processor, 'Avendors': Avendors, 'Bvendors': Bvendors, 'Cvendors': Cvendors}
             entry = {'name': processor['name'], 'hashrate': processor['hashrate'], 'approved_vendors': Avendors}
+            # input(archive_entry)
+            # print('\n')
+            # input(entry)
+            # print('\n\n\n')
             processor_list.append(entry)
-            achive.append(archive_entry)
+            archive.append(archive_entry)
+    return archive, processor_list
 
-    print_vendor_options(achive)
+if __name__ == "__main__":
+    processors_info = get_processors_info()
+    archive, processor_list = main_search(processors_info)
+    print_vendor_options(archive)
     idenitfy_optimal_cpu_by_price(processor_list)
 
 #EOF
