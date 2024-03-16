@@ -4,6 +4,7 @@
 import os
 import sys
 import time
+import urllib
 
 # Third party Python libraries.
 import requests
@@ -14,20 +15,21 @@ from bs4 import BeautifulSoup
 # Custom Python libraries.
 
 
-__version__ = "1.2.1"
+__version__ = "1.3.0"
 
 #Config
-SER_NUM = 75                   #search number- how many search results the search engine return
-SLEEPTIME = 1                   #In seconds, provides a pause to avoid rate limiting by search engine
-SAMPLES_THRESHOLD = 15           #samples is the amount of times a benchmark test was submitted
-HASHRATE_MAX= 100000             #exlude the big boys
-HASHRATE_THRESHOLD= 17000       #Higher Hashrate the better / more expensive
+SER_NUM=75                   #search number- how many search results the search engine return
+SLEEPTIME=1                   #In seconds, provides a pause to avoid rate limiting by search engine
+SAMPLES_THRESHOLD=15           #samples is the amount of times a benchmark test was submitted
+HASHRATE_MAX=100000             #exlude the big boys
+HASHRATE_THRESHOLD=17000       #Higher Hashrate the better / more expensive
 EXCLUDE_UNBRANDED_CPUS=True     #unbranded_CPUs are unoffical CPUs that were never released
 EXCLUDE_AMD=False
 EXCLUDE_INTEL=True
 EXCLUDE_OTHER=True
 CPU_FILE = 'XMRig.json'
-SEARCH_RESULTS_FILE = ''
+SEARCH_RESULTS_FILE = 'search_results.json'
+HR='1_cpu_hashrate' #Use either '1_cpu_hashrate' or 'hashrate'. The latter is the max HR with an unknown number of CPUs
 
 EXCLUSIVE_VENDORS= [
     'www.ebay.com',
@@ -74,6 +76,12 @@ UNVERIFIED_VENDORS = [
     "ips.insight.com",
     "www.onlogic.com"]
 
+def generate_list_from_file():
+    with open(SEARCH_RESULTS_FILE, 'r', encoding='utf-8') as file:
+        archive = json.load(file)
+    print_vendor_options(archive)
+    idenitfy_optimal_cpu_by_price(archive)
+
 def incomplete_search():
     with open('incomplete_search_results.json', 'r', encoding='utf-8') as file:
         data = json.load(file)
@@ -107,11 +115,10 @@ def get_processors_info(print_results=True):
     for index, row in enumerate(cpu_list):
         processor_info = {
             "rank": index,
-            # "name": row['cpu'],
+            "name": row['cpu'],
             "hashrate": int(row['hashrate']),
             # "hashrate_1t": int(row['hashrate_1t']),
-            "samples": row['count'],
-            "name": row['cpu']}
+            "samples": row['count'],}
         processors_info.append(processor_info)
 
     filtered_processors = [processor for processor in processors_info if HASHRATE_MAX>=float(processor['hashrate'])>=HASHRATE_THRESHOLD]
@@ -129,6 +136,38 @@ def get_processors_info(print_results=True):
         print(f"hashrate range: {HASHRATE_THRESHOLD}-{HASHRATE_MAX}\tSAMPLES_THRESHOLD: {SAMPLES_THRESHOLD}")
         input("\nPress Enter to execute search") #remove maybe?
     return filtered_processors
+
+def get_processor_nodes(processor_list):
+    URL = 'https://api.xmrig.com/1/benchmarks?algo=rx%2F0&cpu='
+    real_hr_list = []
+    for processor in tqdm(processor_list, desc=f"Researching cpu benchmark... ", unit="search"):
+        time.sleep(SLEEPTIME) # Introduce a delay to avoid rate limiting
+        
+        try:
+            uri = processor['name'].replace(" ", "%20").replace("-", "%2D")
+            response = requests.get(URL + uri, timeout=9)
+            response.raise_for_status()
+        except Exception as e: 
+            print(e)
+            exit()
+
+        benchmarks_with_1_cpu = [d for d in response.json() if d['cpu']['packages'] == 1]
+        bw1c = sorted(benchmarks_with_1_cpu, key=lambda x: x['hashrate'], reverse=True)
+
+        # top_hashrate = int(bw1c[0]['hashrate'])
+        # if len(bw1c) >= 3: average_3_hashrate = int(sum(d['hashrate'] for d in bw1c[:3]) / 3)
+        # else: average_3_hashrate = -1
+        # if len(bw1c) >= 5: average_5_hashrate = int(sum(d['hashrate'] for d in bw1c[:5]) / 5)
+        # else: average_5_hashrate = -1
+
+        # data = {'t':top_hashrate, 'a3': average_3_hashrate, 'a5': average_5_hashrate}
+        # real_hr_list.append(data)
+
+        real_hr_list.append(int(bw1c[0]['hashrate']))
+    for i in range(0, len(real_hr_list)):
+        processor_list[i]['1_cpu_hashrate'] = real_hr_list[i]
+
+    return processor_list
 
 def search_processor_price_duckduckgo(processor_name):
     url = "https://api.duckduckgo.com/"
@@ -243,35 +282,37 @@ def main_search(processors_info, archive=None):
 
     if SEARCH_RESULTS_FILE:
         with open(SEARCH_RESULTS_FILE, 'w', encoding='utf-8') as file: 
-            json.dump(archive, file)
+            data = {'processors_info': processors_info, 'archive': archive}
+            json.dump(data, file)
     return archive
 
-def print_vendor_options(processor_list):
+def print_vendor_options(processor_list, only_list_a=True):
     print("Processor information with search results:")
-    for i in processor_list:
-        print(f"\n\n\n{i['processors_info']['rank']}. {i['processors_info']['name']}\tHR: {i['processors_info']['hashrate']}")
-        if len(i['Avendors']) > 0:
-            for listing in i['Avendors']:
+    processor_list.sort(key=lambda x: x['processors_info']['1_cpu_hashrate'])
+    for cpu in processor_list:
+        print(f"\n\n\n{cpu['processors_info']['rank']}. {cpu['processors_info']['name']}\t1 CPU HR: {cpu['processors_info']['1_cpu_hashrate']}\tTop HR: {cpu['processors_info']['hashrate']}")
+        if len(cpu['Avendors']) > 0:
+            for listing in cpu['Avendors']:
                 price = "${:<10}".format(listing['price'])
                 source = "{:<25}".format(listing['source'])
                 title = listing['title']
                 print(f"{price}{source}{title}")
-        if len(i['Bvendors']) > 0:
-            print('     Unverified vendors:')
-            for listing in i['Bvendors']:
-                price = "${:<10}".format(listing['price'])
-                source = "{:<25}".format(listing['source'])
-                title = listing['title']
-                print(f"{price}{source}{title}")
-        if len(i['Cvendors']) > 0:
-            print('     Unknown vendors:')
-            for listing in i['Cvendors']:
-                price = "${:<10}".format(listing['price'])
-                source = "{:<25}".format(listing['source'])
-                title = listing['title']
-                print(f"{price}{source}{title}")
-    print()
-
+        if not only_list_a:
+            if len(cpu['Bvendors']) > 0:
+                print('     Unverified vendors:')
+                for listing in cpu['Bvendors']:
+                    price = "${:<10}".format(listing['price'])
+                    source = "{:<25}".format(listing['source'])
+                    title = listing['title']
+                    print(f"{price}{source}{title}")
+            if len(cpu['Cvendors']) > 0:
+                print('     Unknown vendors:')
+                for listing in cpu['Cvendors']:
+                    price = "${:<10}".format(listing['price'])
+                    source = "{:<25}".format(listing['source'])
+                    title = "{}".format(listing['title'])
+                    print(f"{price}{source}{title}")
+    
 def idenitfy_optimal_cpu_by_price(processor_list):
     hr2price = []
 
@@ -279,22 +320,28 @@ def idenitfy_optimal_cpu_by_price(processor_list):
         vendors = processor['Avendors']
         vendors = [vendor for vendor in vendors if vendor['source'] in EXCLUSIVE_VENDORS] #Filters out non exclusive vendors
 
-        ratio = int(processor['processors_info']['hashrate']) / vendors[0]['price']
-        entry = {'name': processor['processors_info']['name'], 'rating': ratio, 'link': vendors[0]['link']}
+        try:
+            ratio = int(processor['processors_info'][HR]) / vendors[0]['price']
+            entry = {'name': processor['processors_info']['name'], 'rating': ratio, 'link': vendors[0]['link']}
+        except IndexError: pass
         hr2price.append(entry) 
     hr2price.sort(key=lambda x: x['rating'], reverse=True)
-    print("Higher Score is better!")
+    print("\nHigher Score is better!")
     for i, entry in enumerate(hr2price):
         print(f'{i}. {entry["name"]}\tScore:{round(entry["rating"], 3)}\t{entry["link"]}\n')
 
-
 if __name__ == "__main__":
+    if os.path.exists(SEARCH_RESULTS_FILE):
+        generate_list_from_file()
+        exit()
+
     if os.path.exists('incomplete_search_results.json'):
         processors_info, incomplete_archive= incomplete_search()
         archive = main_search(processors_info, incomplete_archive)
     else:
         processors_info = get_processors_info()
-        archive = main_search(processors_info)
+        processors = get_processor_nodes(processors_info)
+        archive = main_search(processors)
     print_vendor_options(archive)
     idenitfy_optimal_cpu_by_price(archive)
 
