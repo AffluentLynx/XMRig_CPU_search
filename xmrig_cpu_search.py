@@ -14,14 +14,14 @@ from bs4 import BeautifulSoup
 # Custom Python libraries.
 
 
-__version__ = "1.1.0"
+__version__ = "1.2.1"
 
-
+#Config
 SER_NUM = 75                   #search number- how many search results the search engine return
 SLEEPTIME = 1                   #In seconds, provides a pause to avoid rate limiting by search engine
-samples_threshold = 15           #samples is the amount of times a benchmark test was submitted
+SAMPLES_THRESHOLD = 15           #samples is the amount of times a benchmark test was submitted
 HASHRATE_MAX= 100000             #exlude the big boys
-hashrate_threshold= 17000       #Higher Hashrate the better / more expensive
+HASHRATE_THRESHOLD= 17000       #Higher Hashrate the better / more expensive
 EXCLUDE_UNBRANDED_CPUS=True     #unbranded_CPUs are unoffical CPUs that were never released
 EXCLUDE_AMD=False
 EXCLUDE_INTEL=True
@@ -80,7 +80,7 @@ def incomplete_search():
     archive = data['archive']
     processors_info = data['processors_info']
     print(f"Resuming search on number {len(archive)} out of {len(processors_info)}")
-    os.remove('incomplete_search_results.json')
+    #os.remove('incomplete_search_results.json')
     return processors_info, archive
 
 def get_processors_info(print_results=True):
@@ -94,7 +94,9 @@ def get_processors_info(print_results=True):
             exit()
     else:
         try:
-            cpu_list = requests.get('https://api.xmrig.com/1/benchmarks', timeout=9)
+            # cpu_list = requests.get('https://api.xmrig.com/1/benchmarks?cpu=AMD+EPYC+7601+32-Core+Processor', timeout=9)
+            # input(cpu_list.json())
+            cpu_list = requests.get('https://api.xmrig.com/1/benchmarks?algo=rx%2F0', timeout=9)
             cpu_list.raise_for_status()
             with open(CPU_FILE, "w") as file:
                 json.dump(cpu_list.json(), file)
@@ -112,8 +114,8 @@ def get_processors_info(print_results=True):
             "name": row['cpu']}
         processors_info.append(processor_info)
 
-    filtered_processors = [processor for processor in processors_info if HASHRATE_MAX>=float(processor['hashrate'])>=hashrate_threshold]
-    filtered_processors = [processor for processor in filtered_processors if int(processor['samples']) >= samples_threshold]
+    filtered_processors = [processor for processor in processors_info if HASHRATE_MAX>=float(processor['hashrate'])>=HASHRATE_THRESHOLD]
+    filtered_processors = [processor for processor in filtered_processors if int(processor['samples']) >= SAMPLES_THRESHOLD]
     if EXCLUDE_AMD: filtered_processors= [processor for processor in filtered_processors if not 'AMD' in processor["name"]]
     if EXCLUDE_INTEL: filtered_processors= [processor for processor in filtered_processors if not 'Intel' in processor["name"]]
     if EXCLUDE_OTHER: filtered_processors= [processor for processor in filtered_processors if 'Intel' in processor["name"] or 'AMD' in processor["name"]]
@@ -124,7 +126,7 @@ def get_processors_info(print_results=True):
         for processor in filtered_processors:
             print(processor)
         print(f"Number of Processors: {len(filtered_processors)}")
-        print(f"hashrate range: {hashrate_threshold}-{HASHRATE_MAX}\tsamples_threshold: {samples_threshold}")
+        print(f"hashrate range: {HASHRATE_THRESHOLD}-{HASHRATE_MAX}\tSAMPLES_THRESHOLD: {SAMPLES_THRESHOLD}")
         input("\nPress Enter to execute search") #remove maybe?
     return filtered_processors
 
@@ -213,8 +215,8 @@ def search_processor_price_google(processor_name):
     return a_vendors, b_vendors, c_vendors
 
 def main_search(processors_info, archive=None):
-    processor_list = [] 
-    if not archive: archive = []
+    if not archive: 
+        archive = []
     for processor in tqdm(processors_info[len(archive):], desc=f"Searching for prices... ", unit="search"):
         Avendors, Bvendors, Cvendors  = search_processor_price_google(processor["name"])
 
@@ -226,7 +228,7 @@ def main_search(processors_info, archive=None):
             exit()
 
         if len(Avendors) == 0 and len(Avendors) == 0:
-            print(f'Error! No known vendors found. {len(Cvendors)} Unknown vendors found')
+            print(f'Warning! No known vendors found. {len(Cvendors)} Unknown vendors found')
             archive_entry = {'processors_info': processor, 'Avendors': None, 'Bvendors': None, 'Cvendors': Cvendors}
             archive.append(archive_entry)
         elif len(Avendors) == 0:
@@ -237,13 +239,12 @@ def main_search(processors_info, archive=None):
         else:
             archive_entry = {'processors_info': processor, 'Avendors': Avendors, 'Bvendors': Bvendors, 'Cvendors': Cvendors}
             entry = {'name': processor['name'], 'hashrate': processor['hashrate'], 'approved_vendors': Avendors}
-            processor_list.append(entry)
             archive.append(archive_entry)
 
     if SEARCH_RESULTS_FILE:
         with open(SEARCH_RESULTS_FILE, 'w', encoding='utf-8') as file: 
             json.dump(archive, file)
-    return archive, processor_list
+    return archive
 
 def print_vendor_options(processor_list):
     print("Processor information with search results:")
@@ -295,7 +296,7 @@ if __name__ == "__main__":
         processors_info = get_processors_info()
         archive = main_search(processors_info)
     print_vendor_options(archive)
-    idenitfy_optimal_cpu_by_price_(archive)
+    idenitfy_optimal_cpu_by_price(archive)
 
 
 #EOF
